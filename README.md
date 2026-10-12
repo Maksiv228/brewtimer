@@ -54,4 +54,4 @@
 gradlew.bat build
 ```
 
-Готовый мод появится в `build/libs/brewtimer-1.3.0.jar`. Положите его в папку `mods` вместе с Fabric API для 26.2.
+Готовый мод появится в `build/libs/brewtimer-1.3.1.jar`. Положите его в папку `mods` вместе с Fabric API для 26.2.

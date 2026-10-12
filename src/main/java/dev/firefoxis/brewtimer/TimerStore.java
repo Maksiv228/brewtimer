@@ -267,6 +267,12 @@ public final class TimerStore {
 			age = minutes + Math.min(sinceLast, 1.0) / 2.0;
 		} else if (estimate >= low && estimate < high) {
 			age = estimate;
+		} else if (estimate >= high && estimate < high + 1) {
+			// Наш отсчёт чуть впереди: минута у BreweryX вот-вот засчитается.
+			age = high - 2.0 / 60.0;
+		} else if (estimate < low && estimate >= low - 1) {
+			// Наш отсчёт чуть позади: минута только что засчиталась.
+			age = low + 2.0 / 60.0;
 		} else {
 			age = (low + high) / 2.0;
 		}

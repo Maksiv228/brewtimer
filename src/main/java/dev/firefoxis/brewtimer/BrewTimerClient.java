@@ -224,17 +224,30 @@ public class BrewTimerClient implements ClientModInitializer {
 
 		TimerStore.Cauldron cauldron = TimerStore.applyClock(dimension, pos, minutes);
 		Minecraft client = Minecraft.getInstance();
-		if (client.player != null) {
-			Recipes.Recipe recipe = cauldron.recipe();
-			String status = "Котёл варит ~" + Recipes.formatClock(System.currentTimeMillis() - cauldron.start);
-			if (recipe != null) {
-				long left = recipe.cookMillis() - (System.currentTimeMillis() - cauldron.start);
-				status += left > 0 ? ", " + recipe.name() + " — осталось " + Recipes.formatClock(left)
-						: ", " + recipe.name() + " — пора разливать!";
-			} else {
-				status += ". Рецепт неизвестен — выберите его в окне таймеров (B)";
-			}
-			chat(client.player, status);
+		if (client.player == null) {
+			return;
+		}
+
+		Recipes.Recipe recipe = cauldron.recipe();
+		int counted = Math.max(minutes, 0);
+		if (recipe == null) {
+			chat(client.player, "BreweryX насчитал " + counted + " мин. Рецепт неизвестен — выберите его в окне таймеров (B)");
+			return;
+		}
+
+		int need = recipe.cookMinutes();
+		if (counted == need) {
+			// Счётчик плагина ровно на нужной минуте — лучший момент.
+			chat(client.player, recipe.name() + ": " + counted + " из " + need + " мин — РАЗЛИВАЙ СЕЙЧАС!");
+			client.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_PLING, 1.0F));
+		} else if (counted > need) {
+			chat(client.player, recipe.name() + ": " + counted + " из " + need + " мин — уже переварено, разливай поскорее");
+		} else {
+			long left = recipe.cookMillis() - (System.currentTimeMillis() - cauldron.start);
+			String when = left > 0 ? "~" + Recipes.formatClock(left) : "вот-вот, проверь часами ещё раз через пару секунд";
+			chat(client.player, recipe.name() + ": " + counted + " из " + need + " мин — ещё рано, осталось " + when);
+			// Минута ещё не засчиталась — даём сигналу «пора» прозвучать снова.
+			forgetWarnings(cauldron.id());
 		}
 	}
 
@@ -322,7 +335,9 @@ public class BrewTimerClient implements ClientModInitializer {
 			if (view.remaining() <= 0 && WARNED_DONE.add(view.id())) {
 				WARNED_MINUTE.add(view.id());
 				client.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_PLING, 1.0F));
-				String action = view.kind().equals("Котёл") ? "пора разливать!" : "пора доставать из бочки!";
+				String action = view.kind().equals("Котёл")
+						? "пора! Проверь часами: если минута засчитана — разливай"
+						: "пора доставать из бочки!";
 				chat(client.player, view.title() + " [" + view.location() + "] — " + action);
 			}
 		}
