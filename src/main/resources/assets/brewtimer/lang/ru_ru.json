@@ -1,4 +1,5 @@
 {
   "key.category.brewtimer.main": "Таймер варки",
-  "key.brewtimer.open": "Открыть все таймеры"
+  "key.brewtimer.open": "Открыть все таймеры",
+  "key.brewtimer.inspect": "Показать данные напитка в руке"
 }

@@ -61,6 +61,15 @@ public final class TimerStore {
 		public String recipeId;
 		/** true — рецепт взят из последней варки, а не по названию. */
 		public boolean guessed;
+		/** Откуда известен возраст: tag — из скрытых данных, lore — из описания, start — от момента закладки. */
+		public String source = "start";
+		/** Последнее прочитанное из описания число лет и когда. */
+		public Integer loreYears;
+		public long loreAt;
+	}
+
+	/** Что мод увидел в слоте бочки при закрытии. */
+	public record DrinkReading(String name, BrewData.Result data) {
 	}
 
 	public static final class Barrel {
@@ -132,8 +141,8 @@ public final class TimerStore {
 
 	// ---------- Бочки ----------
 
-	/** Обновляет содержимое бочки после закрытия её окна. slots: номер слота → название напитка. */
-	public static void updateBarrel(String dimension, BlockPos pos, Map<Integer, String> slots) {
+	/** Обновляет содержимое бочки после закрытия её окна. slots: номер слота → что в нём лежит. */
+	public static void updateBarrel(String dimension, BlockPos pos, Map<Integer, DrinkReading> slots) {
 		Barrel barrel = null;
 		for (Barrel b : data.barrels) {
 			if (b.near(dimension, pos)) {
@@ -161,27 +170,43 @@ public final class TimerStore {
 		}
 
 		List<BarrelDrink> updated = new ArrayList<>();
-		for (Map.Entry<Integer, String> entry : slots.entrySet()) {
-			BarrelDrink previous = old.get(entry.getKey());
-			if (previous != null && previous.name.equals(entry.getValue())) {
-				updated.add(previous);
-				continue;
+		for (Map.Entry<Integer, DrinkReading> entry : slots.entrySet()) {
+			DrinkReading reading = entry.getValue();
+			BrewData.Tag tag = reading.data().tag();
+
+			// Рецепт: из скрытых данных → по названию → прежний для этого слота.
+			Recipes.Recipe recipe = tag != null && tag.recipe() != null ? Recipes.byDrinkName(tag.recipe()) : null;
+			if (recipe == null) {
+				recipe = Recipes.byDrinkName(reading.name());
 			}
 
-			BarrelDrink drink = new BarrelDrink();
-			drink.slot = entry.getKey();
-			drink.name = entry.getValue();
-			drink.start = now;
+			BarrelDrink previous = old.get(entry.getKey());
+			boolean samePrevious = previous != null && (previous.name.equals(reading.name())
+					|| (recipe != null && recipe.id().equals(previous.recipeId)));
 
-			Recipes.Recipe recipe = Recipes.byDrinkName(drink.name);
-			if (recipe == null && data.lastBrewedRecipe != null && now - data.lastBrewedAt < 3 * 3_600_000L) {
+			BarrelDrink drink;
+			if (samePrevious) {
+				drink = previous;
+				drink.name = reading.name();
+			} else {
+				drink = new BarrelDrink();
+				drink.slot = entry.getKey();
+				drink.name = reading.name();
+				drink.start = now;
+			}
+
+			if (recipe != null) {
+				drink.recipeId = recipe.id();
+				drink.guessed = false;
+			} else if (drink.recipeId == null && data.lastBrewedRecipe != null && now - data.lastBrewedAt < 3 * 3_600_000L) {
 				Recipes.Recipe last = Recipes.byId(data.lastBrewedRecipe);
 				if (last != null && last.ageYears() > 0) {
-					recipe = last;
+					drink.recipeId = last.id();
 					drink.guessed = true;
 				}
 			}
-			drink.recipeId = recipe == null ? null : recipe.id();
+
+			correctAge(drink, reading.data(), now);
 			updated.add(drink);
 		}
 
@@ -190,6 +215,42 @@ public final class TimerStore {
 			data.barrels.remove(barrel);
 		}
 		save();
+	}
+
+	/** Подправляет время закладки по тому, что прочитано из напитка. */
+	private static void correctAge(BarrelDrink drink, BrewData.Result reading, long now) {
+		long yearMs = Recipes.MINUTES_PER_YEAR * 60_000L;
+
+		if (reading.tag() != null) {
+			// Точный дробный возраст из скрытых данных.
+			drink.start = now - (long) (reading.tag().ageYears() * yearMs);
+			drink.source = "tag";
+			return;
+		}
+
+		Integer years = reading.loreYears();
+		if (years == null) {
+			return;
+		}
+
+		double estimate = (now - drink.start) / (double) yearMs;
+		double age;
+		if (drink.loreYears != null && years == drink.loreYears + 1 && now > drink.loreAt) {
+			// Число лет сменилось с прошлого открытия: переход был между тем открытием и этим.
+			double sinceLast = (now - drink.loreAt) / (double) yearMs;
+			age = years + Math.min(sinceLast, 1.0) / 2.0;
+		} else if (estimate >= years && estimate < years + 1) {
+			// Наша оценка не противоречит описанию — оставляем как есть.
+			age = estimate;
+		} else {
+			// Расходится больше чем на год — ставим середину прочитанного года.
+			age = years + 0.5;
+		}
+
+		drink.start = now - (long) (age * yearMs);
+		drink.source = "lore";
+		drink.loreYears = years;
+		drink.loreAt = now;
 	}
 
 	// ---------- Список для отображения ----------
@@ -240,6 +301,11 @@ public final class TimerStore {
 					if (first.guessed) {
 						details.add("рецепт определён по последней варке");
 					}
+					details.add(switch (first.source == null ? "start" : first.source) {
+						case "tag" -> "возраст из данных напитка (точно)";
+						case "lore" -> "возраст из описания напитка (точность до ±10 мин)";
+						default -> "возраст считается от момента, когда напиток положили";
+					});
 				} else {
 					details.add("рецепт не определён — показываю только прошедшее время");
 				}

@@ -68,6 +68,7 @@ public class BrewTimerClient implements ClientModInitializer {
 	private static final int COLOR_BACKGROUND = 0x90000000;
 
 	private static KeyMapping openKey;
+	private static KeyMapping inspectKey;
 
 	/** Последний блок, по которому кликнули (чтобы знать, где стоит открытая бочка). */
 	private static BlockPos lastClickedPos;
@@ -85,6 +86,8 @@ public class BrewTimerClient implements ClientModInitializer {
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("brewtimer", "main"));
 		openKey = KeyMappingHelper.registerKeyMapping(
 				new KeyMapping("key.brewtimer.open", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_B, category));
+		inspectKey = KeyMappingHelper.registerKeyMapping(
+				new KeyMapping("key.brewtimer.inspect", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_J, category));
 
 		UseBlockCallback.EVENT.register(BrewTimerClient::onUseBlock);
 		ClientTickEvents.END_CLIENT_TICK.register(BrewTimerClient::onTick);
@@ -201,14 +204,14 @@ public class BrewTimerClient implements ClientModInitializer {
 	}
 
 	private static void captureBarrel(AbstractContainerScreen<?> screen, String dimension, BlockPos pos) {
-		Map<Integer, String> drinks = new LinkedHashMap<>();
+		Map<Integer, TimerStore.DrinkReading> drinks = new LinkedHashMap<>();
 		for (Slot slot : screen.getMenu().slots) {
 			if (slot.container instanceof Inventory) {
 				continue;
 			}
 			ItemStack stack = slot.getItem();
 			if (stack.is(Items.POTION)) {
-				drinks.put(slot.index, stack.getHoverName().getString());
+				drinks.put(slot.index, new TimerStore.DrinkReading(stack.getHoverName().getString(), BrewData.read(stack)));
 			}
 		}
 		TimerStore.updateBarrel(dimension, pos, drinks);
@@ -220,6 +223,12 @@ public class BrewTimerClient implements ClientModInitializer {
 		while (openKey.consumeClick()) {
 			if (client.player != null) {
 				client.gui.setScreen(new TimersScreen());
+			}
+		}
+
+		while (inspectKey.consumeClick()) {
+			if (client.player != null) {
+				inspectHeldItem(client.player);
 			}
 		}
 
@@ -309,6 +318,46 @@ public class BrewTimerClient implements ClientModInitializer {
 			return Recipes.formatClock(view.remaining());
 		}
 		return "пора! +" + Recipes.formatClock(-view.remaining());
+	}
+
+	/** Отладка: что мод видит в напитке в основной руке. Подробности — в config/brewtimer-debug.txt. */
+	private static void inspectHeldItem(Player player) {
+		ItemStack stack = player.getMainHandItem();
+		if (stack.isEmpty()) {
+			chat(player, "Возьмите напиток в основную руку и нажмите клавишу ещё раз");
+			return;
+		}
+
+		List<String> lines = BrewData.describe(stack);
+		for (String line : lines) {
+			chat(player, line);
+		}
+
+		StringBuilder dump = new StringBuilder();
+		dump.append("===== ").append(java.time.LocalDateTime.now()).append(" =====\n");
+		for (String line : lines) {
+			dump.append(line).append('\n');
+		}
+		dump.append("Компоненты: ").append(stack.getComponents()).append('\n');
+		byte[] raw = BrewData.rawTag(stack);
+		if (raw != null) {
+			StringBuilder hex = new StringBuilder();
+			for (byte b : raw) {
+				hex.append(String.format("%02x ", b));
+			}
+			dump.append("brewdata (hex): ").append(hex.toString().trim()).append('\n');
+		}
+		dump.append('\n');
+
+		java.nio.file.Path file = net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("brewtimer-debug.txt");
+		try {
+			java.nio.file.Files.writeString(file, dump.toString(), java.nio.charset.StandardCharsets.UTF_8,
+					java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+			chat(player, "Подробный отчёт дописан в config/brewtimer-debug.txt");
+		} catch (java.io.IOException e) {
+			LOGGER.warn("Не удалось записать {}", file, e);
+		}
+		LOGGER.info("[brewtimer] {}", dump);
 	}
 
 	public static void forgetWarnings(String id) {

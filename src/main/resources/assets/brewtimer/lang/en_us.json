@@ -1,4 +1,5 @@
 {
   "key.category.brewtimer.main": "Brew Timer",
-  "key.brewtimer.open": "Open all timers"
+  "key.brewtimer.open": "Open all timers",
+  "key.brewtimer.inspect": "Inspect held brew"
 }
