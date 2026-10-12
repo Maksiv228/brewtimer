@@ -113,7 +113,8 @@ public class BrewTimerClient implements ClientModInitializer {
 		lastClickedDimension = dimension;
 		lastClickedAt = System.currentTimeMillis();
 
-		if (!level.getBlockState(pos).is(Blocks.WATER_CAULDRON)) {
+		// BreweryX берёт ингредиенты только из основной руки; вторую руку игра проверяет следом — её пропускаем.
+		if (hand != InteractionHand.MAIN_HAND || !level.getBlockState(pos).is(Blocks.WATER_CAULDRON)) {
 			return InteractionResult.PASS;
 		}
 
@@ -122,7 +123,7 @@ public class BrewTimerClient implements ClientModInitializer {
 
 		if (stack.isEmpty()) {
 			// Shift + ПКМ пустой рукой — сбросить таймер вручную.
-			if (cauldron != null && player.isShiftKeyDown() && hand == InteractionHand.MAIN_HAND) {
+			if (cauldron != null && player.isShiftKeyDown()) {
 				TimerStore.removeCauldron(cauldron);
 				chat(player, "Таймер котла сброшен");
 			}
