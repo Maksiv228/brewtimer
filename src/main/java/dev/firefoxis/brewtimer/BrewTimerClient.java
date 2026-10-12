@@ -141,16 +141,22 @@ public class BrewTimerClient implements ClientModInitializer {
 			return InteractionResult.PASS;
 		}
 
+		String key = Recipes.keyOf(stack);
 		if (cauldron == null) {
+			// Клик предметом не из рецептов (меч, кирка…) таймер не запускает.
+			if (!Recipes.INGREDIENTS.containsKey(key)) {
+				return InteractionResult.PASS;
+			}
 			cauldron = TimerStore.startCauldron(dimension, pos);
+			chat(player, "Таймер котла запущен");
 		}
 		// BreweryX забирает по одному предмету за клик.
-		cauldron.contents.merge(Recipes.keyOf(stack), 1, Integer::sum);
+		cauldron.contents.merge(key, 1, Integer::sum);
 
 		Recipes.Match match = cauldron.match();
 		String status = match.exact()
-				? match.title() + (match.hints().isEmpty() ? " — всё верно" : " — " + match.hints().get(0))
-				: match.hints().get(0);
+				? match.title() + (match.hints().isEmpty() ? " — всё верно" : " — " + String.join("; ", match.hints()))
+				: String.join("; ", match.hints());
 		player.sendOverlayMessage(Component.literal(status));
 
 		// PASS — сервер и плагин обрабатывают клик как обычно.

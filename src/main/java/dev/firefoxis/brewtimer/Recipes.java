@@ -173,35 +173,42 @@ public final class Recipes {
 		return key.startsWith("other:") ? key.substring("other:".length()) : key;
 	}
 
-	public static Match match(Map<String, Integer> contents) {
-		boolean unknown = false;
-		for (String key : contents.keySet()) {
-			if (!INGREDIENTS.containsKey(key)) {
-				unknown = true;
+	public static Match match(Map<String, Integer> allContents) {
+		// Предметы не из рецептов в подборе не участвуют, но о них предупреждаем.
+		Map<String, Integer> contents = new LinkedHashMap<>();
+		List<String> foreign = new ArrayList<>();
+		for (Map.Entry<String, Integer> e : allContents.entrySet()) {
+			if (INGREDIENTS.containsKey(e.getKey())) {
+				contents.put(e.getKey(), e.getValue());
+			} else {
+				foreign.add(nameOf(e.getKey()) + " ×" + e.getValue());
 			}
 		}
+		boolean unknown = !foreign.isEmpty();
+		String foreignHint = "посторонний предмет: " + String.join(", ", foreign) + " (если это не ингредиент — не страшно)";
 
 		List<Recipe> candidates = new ArrayList<>();
 		List<Recipe> exact = new ArrayList<>();
-		if (!unknown) {
-			for (Recipe recipe : RECIPES) {
-				if (recipe.ingredients().keySet().containsAll(contents.keySet())) {
-					candidates.add(recipe);
-					if (recipe.ingredients().keySet().equals(contents.keySet())) {
-						exact.add(recipe);
-					}
+		for (Recipe recipe : RECIPES) {
+			if (recipe.ingredients().keySet().containsAll(contents.keySet())) {
+				candidates.add(recipe);
+				if (recipe.ingredients().keySet().equals(contents.keySet())) {
+					exact.add(recipe);
 				}
 			}
 		}
 
 		if (exact.isEmpty()) {
 			List<String> hints = new ArrayList<>();
-			if (unknown) {
-				hints.add("в котле есть предмет не из рецептов");
+			if (contents.isEmpty()) {
+				hints.add("пока нет ингредиентов из рецептов");
 			} else if (candidates.isEmpty()) {
 				hints.add("нет подходящих рецептов");
 			} else {
 				hints.add("подходят: " + joinNames(candidates, 5));
+			}
+			if (unknown) {
+				hints.add(foreignHint);
 			}
 			return new Match(null, List.of(), candidates, hints, unknown);
 		}
@@ -237,7 +244,10 @@ public final class Recipes {
 		if (ties.size() > 1) {
 			hints.add("отличаются бочкой: " + joinWoods(ties));
 		}
-		return new Match(best, ties, candidates, hints, false);
+		if (unknown) {
+			hints.add(foreignHint);
+		}
+		return new Match(best, ties, candidates, hints, unknown);
 	}
 
 	// ---------- Определение напитка в бочке по названию ----------
