@@ -20,6 +20,9 @@ public final class Recipes {
 	/** Сколько реальных минут длится один «год» выдержки (agingYearDuration в config.yml BreweryX). */
 	public static final int MINUTES_PER_YEAR = 20;
 
+	/** Запас к времени варки, мс. */
+	public static final long COOK_MARGIN_MS = 2_000L;
+
 	/** Ингредиент: ключ, название по-русски и предметы, которые им считаются. */
 	public record Ingredient(String key, String name, Set<Item> items) {
 	}
@@ -28,8 +31,9 @@ public final class Recipes {
 	public record Recipe(String id, String name, List<String> serverNames, Map<String, Integer> ingredients,
 			int cookMinutes, int distillRuns, String wood, int ageYears) {
 
+		/** Время варки с небольшим запасом: минута у BreweryX иногда засчитывается на пару секунд позже. */
 		public long cookMillis() {
-			return cookMinutes * 60_000L;
+			return cookMinutes * 60_000L + COOK_MARGIN_MS;
 		}
 
 		public long ageMillis() {
