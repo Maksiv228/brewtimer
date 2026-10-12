@@ -95,6 +95,14 @@ public class TimersScreen extends Screen {
 					BrewTimerClient.forgetWarnings(id);
 					this.minecraft.gui.setScreen(new TimersScreen(shownPage));
 				}).bounds(this.left + this.panelWidth - 24, y, 20, 20).build());
+				if (view.canPickRecipe()) {
+					Runnable prev = view.prevRecipe();
+					Runnable next = view.nextRecipe();
+					this.addRenderableWidget(Button.builder(Component.literal("◀"), btn -> prev.run())
+							.bounds(this.left + this.panelWidth - 70, y, 20, 20).build());
+					this.addRenderableWidget(Button.builder(Component.literal("▶"), btn -> next.run())
+							.bounds(this.left + this.panelWidth - 48, y, 20, 20).build());
+				}
 				y += rowHeight(view);
 			}
 		}
@@ -149,7 +157,7 @@ public class TimersScreen extends Screen {
 			graphics.fill(this.left, top, this.left + this.panelWidth, top + height, COLOR_PANEL);
 
 			int textLeft = this.left + 6;
-			int timeRight = this.left + this.panelWidth - 30;
+			int timeRight = this.left + this.panelWidth - (view.canPickRecipe() ? 76 : 30);
 
 			String time = BrewTimerClient.timeText(view);
 			int timeColor = !view.known() ? COLOR_DETAIL

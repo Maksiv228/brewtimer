@@ -40,6 +40,7 @@ import net.minecraft.world.phys.BlockHitResult;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -75,6 +76,14 @@ public class BrewTimerClient implements ClientModInitializer {
 	private static String lastClickedDimension;
 	private static long lastClickedAt;
 
+	/** Котёл, по которому только что кликнули часами: ждём ответ BreweryX в чате. */
+	private static BlockPos clockPos;
+	private static String clockDimension;
+	private static long clockAt;
+
+	private static final java.util.regex.Pattern CLOCK_MINUTES = java.util.regex.Pattern.compile(
+			"(?:варит уже|boiling for)\\D*(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
+
 	/** Какие оповещения уже прозвучали: «осталась минута» и «готово». */
 	private static final Set<String> WARNED_MINUTE = new HashSet<>();
 	private static final Set<String> WARNED_DONE = new HashSet<>();
@@ -92,6 +101,7 @@ public class BrewTimerClient implements ClientModInitializer {
 		UseBlockCallback.EVENT.register(BrewTimerClient::onUseBlock);
 		ClientTickEvents.END_CLIENT_TICK.register(BrewTimerClient::onTick);
 		ClientPlayConnectionEvents.DISCONNECT.register((listener, client) -> TimerStore.clearCauldrons());
+		ClientReceiveMessageEvents.GAME.register((message, overlay) -> onGameMessage(message));
 		ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> onScreenOpened(screen));
 		HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, HUD_ID, BrewTimerClient::extractHud);
 	}
@@ -137,8 +147,16 @@ public class BrewTimerClient implements ClientModInitializer {
 			return InteractionResult.PASS;
 		}
 
-		// Вода, пустое ведро, зелья и часы (проверка котла) ингредиентами не считаются.
-		if (stack.is(Items.WATER_BUCKET) || stack.is(Items.BUCKET) || stack.is(Items.POTION) || stack.is(Items.CLOCK)) {
+		if (stack.is(Items.CLOCK)) {
+			// Часы: BreweryX ответит в чат, сколько котёл уже варит, — ловим это сообщение.
+			clockPos = pos;
+			clockDimension = dimension;
+			clockAt = System.currentTimeMillis();
+			return InteractionResult.PASS;
+		}
+
+		// Вода, пустое ведро и зелья ингредиентами не считаются.
+		if (stack.is(Items.WATER_BUCKET) || stack.is(Items.BUCKET) || stack.is(Items.POTION)) {
 			return InteractionResult.PASS;
 		}
 
@@ -168,18 +186,55 @@ public class BrewTimerClient implements ClientModInitializer {
 		TimerStore.removeCauldron(cauldron);
 		long elapsed = System.currentTimeMillis() - cauldron.start;
 		Recipes.Match match = cauldron.match();
+		Recipes.Recipe recipe = cauldron.recipe();
 
-		if (match.exact()) {
-			Recipes.Recipe recipe = match.best();
+		if (recipe != null) {
 			long diff = elapsed - recipe.cookMillis();
 			String timing = Math.abs(diff) < 30_000L ? "точно в срок"
 					: diff < 0 ? "раньше на " + Recipes.formatClock(-diff)
 					: "позже на " + Recipes.formatClock(diff);
-			chat(player, match.title() + ": разлито через " + Recipes.formatClock(elapsed) + " (" + timing + ")");
+			chat(player, (match.exact() ? match.title() : recipe.name()) + ": разлито через " + Recipes.formatClock(elapsed) + " (" + timing + ")");
 			chat(player, "Дальше: " + recipe.nextSteps());
 			TimerStore.rememberBrewed(recipe);
 		} else {
 			chat(player, "Разлито через " + Recipes.formatClock(elapsed) + ", рецепт не распознан");
+		}
+	}
+
+	private static void onGameMessage(Component message) {
+		if (clockPos == null || System.currentTimeMillis() - clockAt > 3_000L) {
+			return;
+		}
+		String text = message.getString();
+		String lower = text.toLowerCase(Locale.ROOT);
+
+		int minutes;
+		java.util.regex.Matcher m = CLOCK_MINUTES.matcher(text);
+		if (m.find()) {
+			minutes = Integer.parseInt(m.group(1));
+		} else if (lower.contains("только начал") || lower.contains("just started")) {
+			minutes = -1;
+		} else {
+			return;
+		}
+
+		BlockPos pos = clockPos;
+		String dimension = clockDimension;
+		clockPos = null;
+
+		TimerStore.Cauldron cauldron = TimerStore.applyClock(dimension, pos, minutes);
+		Minecraft client = Minecraft.getInstance();
+		if (client.player != null) {
+			Recipes.Recipe recipe = cauldron.recipe();
+			String status = "Котёл варит ~" + Recipes.formatClock(System.currentTimeMillis() - cauldron.start);
+			if (recipe != null) {
+				long left = recipe.cookMillis() - (System.currentTimeMillis() - cauldron.start);
+				status += left > 0 ? ", " + recipe.name() + " — осталось " + Recipes.formatClock(left)
+						: ", " + recipe.name() + " — пора разливать!";
+			} else {
+				status += ". Рецепт неизвестен — выберите его в окне таймеров (B)";
+			}
+			chat(client.player, status);
 		}
 	}
 

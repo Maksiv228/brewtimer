@@ -35,8 +35,15 @@ public final class TimerStore {
 	public static final class Cauldron {
 		public final String dimension;
 		public final BlockPos pos;
-		public final long start;
+		public long start;
 		public final Map<String, Integer> contents = new LinkedHashMap<>();
+		/** Рецепт, выбранный вручную в окне (для котла, начатого без мода). */
+		public Recipes.Recipe recipeOverride;
+		/** Таймер создан по часам — ингредиенты мод не видел. */
+		public boolean fromClock;
+		/** Последнее показание часов BreweryX (минуты, -1 — «только начал») и когда. */
+		public Integer clockMinutes;
+		public long clockAt;
 
 		Cauldron(String dimension, BlockPos pos, long start) {
 			this.dimension = dimension;
@@ -50,6 +57,12 @@ public final class TimerStore {
 
 		public Recipes.Match match() {
 			return Recipes.match(contents);
+		}
+
+		/** Рецепт, по которому идёт отсчёт: распознанный по ингредиентам или выбранный вручную. */
+		public Recipes.Recipe recipe() {
+			Recipes.Match match = match();
+			return match.exact() ? match.best() : recipeOverride;
 		}
 	}
 
@@ -93,7 +106,16 @@ public final class TimerStore {
 
 	/** Одна строка для экрана и HUD. */
 	public record View(String id, String kind, String title, long remaining, long elapsed, String location,
-			List<String> details, Runnable remove) {
+			List<String> details, Runnable remove, Runnable prevRecipe, Runnable nextRecipe) {
+
+		public View(String id, String kind, String title, long remaining, long elapsed, String location,
+				List<String> details, Runnable remove) {
+			this(id, kind, title, remaining, elapsed, location, details, remove, null, null);
+		}
+
+		public boolean canPickRecipe() {
+			return prevRecipe != null && nextRecipe != null;
+		}
 
 		public boolean known() {
 			return remaining != UNKNOWN;
@@ -217,6 +239,44 @@ public final class TimerStore {
 		save();
 	}
 
+	private static Recipes.Recipe cycle(Recipes.Recipe current, int step) {
+		List<Recipes.Recipe> all = Recipes.RECIPES;
+		int index = current == null ? (step > 0 ? -1 : 0) : all.indexOf(current);
+		return all.get(Math.floorMod(index + step, all.size()));
+	}
+
+	/**
+	 * Котёл проверили часами. minutes — сколько минут насчитал BreweryX, или -1 для «только начал варить».
+	 * Счётчик BreweryX растёт на 1 каждую минуту нагрева, поэтому «N минут» значит от N до N+1.
+	 */
+	public static Cauldron applyClock(String dimension, BlockPos pos, int minutes) {
+		long now = System.currentTimeMillis();
+		Cauldron cauldron = cauldron(dimension, pos);
+		if (cauldron == null) {
+			cauldron = startCauldron(dimension, pos);
+			cauldron.fromClock = true;
+		}
+
+		double low = minutes < 0 ? 0 : minutes;
+		double high = minutes < 0 ? 2 : minutes + 1;
+		double estimate = (now - cauldron.start) / 60_000.0;
+		double age;
+		if (minutes >= 2 && cauldron.clockMinutes != null && minutes == cauldron.clockMinutes + 1 && now > cauldron.clockAt) {
+			// Показание сменилось с прошлой проверки: минута перещёлкнула между проверками.
+			double sinceLast = (now - cauldron.clockAt) / 60_000.0;
+			age = minutes + Math.min(sinceLast, 1.0) / 2.0;
+		} else if (estimate >= low && estimate < high) {
+			age = estimate;
+		} else {
+			age = (low + high) / 2.0;
+		}
+
+		cauldron.start = now - (long) (age * 60_000.0);
+		cauldron.clockMinutes = minutes;
+		cauldron.clockAt = now;
+		return cauldron;
+	}
+
 	/** Подправляет время закладки по тому, что прочитано из напитка. */
 	private static void correctAge(BarrelDrink drink, BrewData.Result reading, long now) {
 		long yearMs = Recipes.MINUTES_PER_YEAR * 60_000L;
@@ -261,18 +321,38 @@ public final class TimerStore {
 
 		for (Cauldron cauldron : new ArrayList<>(CAULDRONS.values())) {
 			Recipes.Match match = cauldron.match();
+			Recipes.Recipe recipe = cauldron.recipe();
 			long elapsed = now - cauldron.start;
-			long remaining = match.exact() ? match.best().cookMillis() - elapsed : UNKNOWN;
+			long remaining = recipe != null ? recipe.cookMillis() - elapsed : UNKNOWN;
+			String title = match.exact() ? match.title() : recipe != null ? recipe.name() : "Котёл";
 
 			List<String> details = new ArrayList<>();
-			details.add("В котле: " + describeContents(cauldron.contents));
-			details.addAll(match.hints());
-			if (match.exact()) {
-				details.add("Варить " + match.best().cookMinutes() + " мин, дальше: " + match.best().nextSteps());
+			if (cauldron.fromClock && cauldron.contents.isEmpty()) {
+				details.add("Ингредиенты неизвестны — таймер создан по часам");
+			} else {
+				details.add("В котле: " + describeContents(cauldron.contents));
+				details.addAll(match.hints());
+			}
+			if (!match.exact()) {
+				details.add(recipe != null ? "рецепт выбран вручную (◀ ▶)" : "выберите рецепт кнопками ◀ ▶, чтобы шёл обратный отсчёт");
+			}
+			if (recipe != null) {
+				details.add("Варить " + recipe.cookMinutes() + " мин, дальше: " + recipe.nextSteps());
+			}
+			if (cauldron.clockMinutes != null) {
+				details.add("по часам BreweryX: " + (cauldron.clockMinutes < 0 ? "только начал" : cauldron.clockMinutes + " мин")
+						+ " (±30 с, точнее при повторной проверке)");
 			}
 
-			views.add(new View(cauldron.id(), "Котёл", match.title(), remaining, elapsed, coords(cauldron.pos),
-					details, () -> CAULDRONS.remove(cauldron.id())));
+			Runnable prev = null;
+			Runnable next = null;
+			if (!match.exact()) {
+				prev = () -> cauldron.recipeOverride = cycle(cauldron.recipeOverride, -1);
+				next = () -> cauldron.recipeOverride = cycle(cauldron.recipeOverride, 1);
+			}
+
+			views.add(new View(cauldron.id(), "Котёл", title, remaining, elapsed, coords(cauldron.pos),
+					details, () -> CAULDRONS.remove(cauldron.id()), prev, next));
 		}
 
 		for (Barrel barrel : new ArrayList<>(data.barrels)) {
